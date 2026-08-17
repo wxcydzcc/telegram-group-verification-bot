@@ -1,0 +1,27 @@
+name = "telegram-group-verification-bot"
+main = "src/index.js"
+compatibility_date = "2026-08-17"
+
+[vars]
+GROUP_CHAT_ID = "0"
+GROUP_NAME = "Example Community"
+GROUP_URL = "https://t.me/your_group"
+CHANNEL_URL = "https://t.me/your_channel"
+WEBSITE_URL = "https://example.com"
+YOUTUBE_URL = ""
+FORUM_URL = ""
+X_URL = ""
+BLOG_URL = ""
+NAV_URL = ""
+STORE_URL = ""
+VERIFY_TIMEOUT_MINUTES = "5"
+MAX_VERIFY_ATTEMPTS = "3"
+
+[[kv_namespaces]]
+binding = "BOT_DATA"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+[triggers]
+crons = ["* * * * *"]
+
+# Configure BOT_TOKEN and WEBHOOK_SECRET as encrypted secrets, never in this file.

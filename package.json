@@ -1,0 +1,16 @@
+{
+  "name": "telegram-group-verification-bot",
+  "version": "1.0.0",
+  "private": false,
+  "description": "Telegram group math-captcha verification, timeout removal, and welcome menus on Cloudflare Workers.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/index.js",
+    "test": "node --test tests/bot.test.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
