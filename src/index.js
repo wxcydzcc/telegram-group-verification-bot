@@ -1,5 +1,5 @@
-const DEFAULT_TIMEOUT_MINUTES = 5;
-const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_TIMEOUT_MINUTES = 2;
+const DEFAULT_REJOIN_COOLDOWN_MINUTES = 30;
 
 export default {
   async fetch(request, env, ctx) {
@@ -154,15 +154,16 @@ async function startVerification(chat, user, env) {
 
   const timeoutMinutes = getTimeoutMinutes(env);
   const challenge = buildChallenge();
+  const challengeId = randomToken(8);
   const displayName = escapeHtml(fullName(user));
   const mention = `<a href="tg://user?id=${user.id}">${displayName}</a>`;
   const replyMarkup = {
-    inline_keyboard: [
-      challenge.options.map((answer) => ({
-        text: String(answer),
-        callback_data: `gv:${user.id}:${answer}`,
+    inline_keyboard: [0, 2].map((start) =>
+      challenge.options.slice(start, start + 2).map((option, offset) => ({
+        text: String(option),
+        callback_data: `gv:${user.id}:${challengeId}:${start + offset}`,
       })),
-    ],
+    ),
   };
 
   const prompt = await telegram(env, "sendMessage", {
@@ -171,8 +172,8 @@ async function startVerification(chat, user, env) {
     text:
       `🔐 <b>新成员验证</b>\n\n` +
       `${mention}，欢迎加入【${escapeHtml(groupName(env))}】。\n` +
-      `请在 ${timeoutMinutes} 分钟内回答：<b>${challenge.a} + ${challenge.b} = ?</b>\n\n` +
-      `验证通过后自动解除禁言；超时或连续答错 ${getMaxAttempts(env)} 次将被移出群组。`,
+      `请在 ${timeoutMinutes} 分钟内完成：<b>${escapeHtml(challenge.prompt)}</b>\n\n` +
+      `只有一次选择机会。验证通过后自动解除禁言；答错或超时将被移出群组。`,
     reply_markup: replyMarkup,
   });
 
@@ -183,8 +184,9 @@ async function startVerification(chat, user, env) {
       userId: user.id,
       firstName: user.first_name || "",
       lastName: user.last_name || "",
-      correct: challenge.correct,
-      attempts: 0,
+      challengeId,
+      correctIndex: challenge.correctIndex,
+      challengeKind: challenge.kind,
       messageId: prompt.message_id,
       expiresAt: Date.now() + timeoutMinutes * 60_000,
     }),
@@ -200,11 +202,11 @@ async function handleVerificationCallback(query, env) {
   }
 
   const chatId = query.message?.chat?.id;
-  const [, targetRaw, answerRaw] = data.split(":");
+  const [, targetRaw, challengeId, optionRaw] = data.split(":");
   const targetUserId = Number(targetRaw);
-  const answer = Number(answerRaw);
+  const optionIndex = Number(optionRaw);
 
-  if (!chatId || !targetUserId || !Number.isFinite(answer)) {
+  if (!chatId || !targetUserId || !challengeId || !Number.isInteger(optionIndex)) {
     await answerCallback(env, query.id, "验证信息无效，请重新入群。", true);
     return;
   }
@@ -227,6 +229,11 @@ async function handleVerificationCallback(query, env) {
   }
 
   const record = JSON.parse(raw);
+  if (challengeId !== record.challengeId || optionIndex < 0 || optionIndex >= 4) {
+    await answerCallback(env, query.id, "验证信息不匹配，请重新加入群组。", true);
+    return;
+  }
+
   if (Date.now() > Number(record.expiresAt)) {
     await removeUnverifiedUser(record, env, "验证超时");
     await env.BOT_DATA.delete(key);
@@ -234,38 +241,87 @@ async function handleVerificationCallback(query, env) {
     return;
   }
 
-  if (answer === Number(record.correct)) {
+  if (!(await claimChallengeButtons(query, env))) {
+    await answerCallback(env, query.id, "该验证已经处理，请勿重复点击。", true);
+    return;
+  }
+
+  await env.BOT_DATA.delete(key);
+
+  if (optionIndex === Number(record.correctIndex)) {
     await restoreDefaultPermissions(chatId, targetUserId, env);
     await safeDeleteMessage(chatId, record.messageId, env);
-    await env.BOT_DATA.delete(key);
     await answerCallback(env, query.id, "验证成功，欢迎加入！", false);
     await sendWelcome(record, env);
     return;
   }
 
-  record.attempts = Number(record.attempts || 0) + 1;
-  const maxAttempts = getMaxAttempts(env);
-  if (record.attempts >= maxAttempts) {
-    await removeUnverifiedUser(record, env, `连续答错 ${maxAttempts} 次`);
-    await env.BOT_DATA.delete(key);
-    await answerCallback(env, query.id, `连续答错 ${maxAttempts} 次，已移出群组。`, true);
-    return;
-  }
-
-  await env.BOT_DATA.put(key, JSON.stringify(record), { expirationTtl: 86400 });
-  await answerCallback(env, query.id, `答案错误，还可尝试 ${maxAttempts - record.attempts} 次。`, true);
+  await removeUnverifiedUser(record, env, "答案错误");
+  await answerCallback(
+    env,
+    query.id,
+    `答案错误，已移出群组。${getRejoinCooldownMinutes(env)} 分钟后可重新尝试。`,
+    true,
+  );
 }
 
-export function buildChallenge(randomInt = secureRandomInt) {
-  const a = randomInt(2, 9);
-  const b = randomInt(2, 9);
-  const correct = a + b;
-  const answers = new Set([correct]);
-  while (answers.size < 4) {
-    const offset = randomInt(-5, 5);
-    answers.add(Math.max(1, correct + (offset === 0 ? 6 : offset)));
+export function buildChallenge(randomInt = secureRandomInt, forcedKind) {
+  const kinds = ["arithmetic", "largest", "count", "sequence"];
+  const kind = forcedKind || kinds[randomInt(0, kinds.length - 1)];
+
+  if (kind === "largest") {
+    const values = uniqueRandomNumbers(4, 11, 98, randomInt);
+    const options = shuffle(values, randomInt);
+    const largest = Math.max(...values);
+    return {
+      kind,
+      prompt: "请选择下面最大的数字",
+      options,
+      correctIndex: options.indexOf(largest),
+    };
   }
-  return { a, b, correct, options: shuffle([...answers], randomInt) };
+
+  if (kind === "count") {
+    const count = randomInt(3, 8);
+    const icon = ["◆", "●", "▲", "■"][randomInt(0, 3)];
+    return numericChallenge(kind, `数一数：${Array(count).fill(icon).join(" ")} 一共有几个？`, count, randomInt);
+  }
+
+  if (kind === "sequence") {
+    const first = randomInt(1, 7);
+    const step = randomInt(2, 5);
+    const sequence = [first, first + step, first + step * 2];
+    return numericChallenge(kind, `找规律：${sequence.join("，")}，下一个数字是？`, first + step * 3, randomInt);
+  }
+
+  const left = randomInt(8, 24);
+  const right = randomInt(2, 9);
+  const subtract = randomInt(0, 1) === 1;
+  const correct = subtract ? left - right : left + right;
+  const operator = subtract ? "−" : "+";
+  return numericChallenge(kind, `计算：${left} ${operator} ${right} = ?`, correct, randomInt);
+}
+
+function numericChallenge(kind, prompt, correct, randomInt) {
+  const values = new Set([correct]);
+  while (values.size < 4) {
+    const offset = randomInt(-7, 7);
+    values.add(Math.max(1, correct + (offset === 0 ? 8 : offset)));
+  }
+  const options = shuffle([...values], randomInt);
+  return { kind, prompt, options, correctIndex: options.indexOf(correct) };
+}
+
+function uniqueRandomNumbers(count, min, max, randomInt) {
+  const values = new Set();
+  while (values.size < count) values.add(randomInt(min, max));
+  return [...values];
+}
+
+function randomToken(byteLength) {
+  const bytes = new Uint8Array(byteLength);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 export function membershipAllowed(member) {
@@ -395,15 +451,11 @@ async function cleanupExpiredVerifications(env) {
 
 async function removeUnverifiedUser(record, env, reason) {
   try {
+    const untilDate = Math.floor(Date.now() / 1000) + getRejoinCooldownMinutes(env) * 60;
     await telegram(env, "banChatMember", {
       chat_id: record.chatId,
       user_id: record.userId,
-    });
-    // Immediately unban so a real user may rejoin and try verification again.
-    await telegram(env, "unbanChatMember", {
-      chat_id: record.chatId,
-      user_id: record.userId,
-      only_if_banned: true,
+      until_date: untilDate,
     });
   } finally {
     await safeDeleteMessage(record.chatId, record.messageId, env);
@@ -455,6 +507,21 @@ async function answerCallback(env, callbackId, text, showAlert) {
   }
 }
 
+async function claimChallengeButtons(query, env) {
+  try {
+    await telegram(env, "editMessageReplyMarkup", {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id,
+      reply_markup: { inline_keyboard: [] },
+    });
+    return true;
+  } catch (error) {
+    const message = String(error?.message || error);
+    if (/message is not modified|message to edit not found/i.test(message)) return false;
+    throw error;
+  }
+}
+
 async function safeDeleteMessage(chatId, messageId, env) {
   if (!messageId) return;
   try {
@@ -485,8 +552,8 @@ function getTimeoutMinutes(env) {
   return Math.max(2, Number(env.VERIFY_TIMEOUT_MINUTES || DEFAULT_TIMEOUT_MINUTES));
 }
 
-function getMaxAttempts(env) {
-  return Math.max(1, Number(env.MAX_VERIFY_ATTEMPTS || DEFAULT_MAX_ATTEMPTS));
+function getRejoinCooldownMinutes(env) {
+  return Math.max(1, Number(env.REJOIN_COOLDOWN_MINUTES || DEFAULT_REJOIN_COOLDOWN_MINUTES));
 }
 
 function fullName(user) {

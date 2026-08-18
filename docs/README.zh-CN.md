@@ -1,15 +1,18 @@
 # Telegram 群组入群验证机器人
 
-这是一个运行在 Cloudflare Workers 免费版上的 Telegram 群组验证机器人。新成员入群后会立即被禁言，完成四选一算术题后恢复群组默认权限；超时或连续答错会被移出群组，验证成功后自动发送欢迎语和链接菜单。
+这是一个运行在 Cloudflare Workers 免费版上的 Telegram 群组验证机器人。新成员入群后会立即被禁言，随机完成四选一验证题后恢复群组默认权限；答错或超时会被移出并进入冷却期，验证成功后自动发送欢迎语和链接菜单。
 
 ## 功能
 
 - 监听新成员加入
 - 自动禁言
-- 随机四选一算术验证
+- 随机四种题型：加减法、找最大数、数图形和简单数列
 - 防止其他成员代答
 - 超时自动移出
-- 连续答错自动移出
+- 只有一次选择机会，答错立即移出
+- 首次点击后立即锁定按钮，避免连续试错
+- 答案仅保存在服务端状态，回调不携带原始答案
+- 失败后临时禁止重新入群
 - 验证成功恢复群组默认权限
 - 自定义欢迎语和最多8个链接按钮
 - 自动删除验证消息
@@ -42,8 +45,8 @@ WEBHOOK_SECRET
 GROUP_CHAT_ID=0
 GROUP_NAME=你的群名称
 GROUP_URL=https://t.me/your_group
-VERIFY_TIMEOUT_MINUTES=5
-MAX_VERIFY_ATTEMPTS=3
+VERIFY_TIMEOUT_MINUTES=2
+REJOIN_COOLDOWN_MINUTES=30
 ```
 
 可选按钮变量：
@@ -96,6 +99,10 @@ Set-ExecutionPolicy -Scope Process Bypass
 - 封禁/限制用户
 
 不要同时运行多个入群验证机器人。
+
+## 防护范围
+
+增强验证适合拦截通用入群脚本、盲点按钮和低成本广告账号，不需要额外网页。它不能保证阻止专门使用OCR或AI识别题目的UserBot。高风险群组仍建议进一步使用“入群申请＋一次性签名链接＋Cloudflare Turnstile”。
 
 ## 许可证
 

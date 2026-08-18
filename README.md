@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 
-Serverless Telegram group verification for Cloudflare Workers. New members are muted, receive a four-choice math challenge, and are restored to the group's default permissions after a correct answer. Timeouts and repeated wrong answers remove the user; successful verification triggers a configurable welcome message and link menu.
+Serverless Telegram group verification for Cloudflare Workers. New members are muted, receive one of several randomized four-choice challenges, and are restored to the group's default permissions after a correct answer. A wrong answer or timeout removes the user and applies a rejoin cooldown; successful verification triggers a configurable welcome message and link menu.
 
 **[中文文档](docs/README.zh-CN.md)**
 
@@ -13,10 +13,10 @@ Serverless Telegram group verification for Cloudflare Workers. New members are m
 ```mermaid
 flowchart LR
     J[New member joins] --> M[Temporarily mute]
-    M --> Q[Four-choice math challenge]
+    M --> Q[Randomized four-choice challenge]
     Q -->|Correct| P[Restore group defaults]
     P --> W[Welcome message and links]
-    Q -->|Wrong too many times| K[Remove member]
+    Q -->|One wrong answer| K[Remove and cooldown]
     Q -->|Timeout| K
 ```
 
@@ -24,9 +24,11 @@ flowchart LR
 
 - Detects new members using `chat_member` updates with a service-message fallback
 - Immediately restricts new members
-- Random four-choice addition challenge
+- Randomized challenge types: arithmetic, largest number, symbol counting, and number sequence
 - Prevents other members from answering someone else's challenge
-- Configurable timeout and maximum attempts
+- One-attempt verification with configurable timeout and rejoin cooldown
+- Opaque option-index callbacks; the answer is stored only in server-side state
+- First click removes all challenge buttons to prevent repeated guessing
 - Removes timed-out users with a Cloudflare Cron Trigger
 - Restores the group's own default permissions after success
 - Configurable welcome text and up to eight optional link buttons
@@ -83,8 +85,8 @@ BOT_DATA
 | `GROUP_CHAT_ID` | `0` initially, then `-100...` | Yes |
 | `GROUP_NAME` | `Example Community` | No |
 | `GROUP_URL` | `https://t.me/your_group` | Yes |
-| `VERIFY_TIMEOUT_MINUTES` | `5` | No |
-| `MAX_VERIFY_ATTEMPTS` | `3` | No |
+| `VERIFY_TIMEOUT_MINUTES` | `2` | No |
+| `REJOIN_COOLDOWN_MINUTES` | `30` | No |
 
 Optional welcome buttons are added only when their URL is a valid `https://` URL:
 
@@ -136,11 +138,11 @@ Update `GROUP_CHAT_ID` with the returned negative number and deploy again.
 
 1. Join with a secondary Telegram account.
 2. Confirm the account is immediately muted.
-3. Confirm a four-choice math challenge appears.
+3. Confirm a randomized four-choice challenge appears.
 4. Click from another member and confirm it is rejected.
 5. Answer correctly and confirm permissions are restored.
 6. Confirm the welcome message and configured buttons appear.
-7. Rejoin and intentionally fail the challenge.
+7. Rejoin and intentionally fail the challenge; confirm a temporary rejoin ban is applied.
 8. Rejoin and let the challenge expire; allow an extra minute for Cron execution.
 
 ## Customization
@@ -148,7 +150,7 @@ Update `GROUP_CHAT_ID` with the returned negative number and deploy again.
 - Verification prompt: `startVerification` in `src/index.js`
 - Welcome copy: `sendWelcome`
 - Button order and supported links: `buildLinkKeyboard`
-- Default timeout and attempts: constants at the top of `src/index.js`
+- Default timeout and rejoin cooldown: constants at the top of `src/index.js`
 
 User-facing strings are currently Chinese-first and can be translated directly in the source.
 
@@ -165,6 +167,10 @@ npm run check
 - Give the bot only the group permissions it needs.
 - Do not run multiple verification bots simultaneously; they can race to restrict or remove the same user.
 - A Telegram bot has one active webhook. Connecting it to another service replaces this deployment's webhook.
+
+### Threat model
+
+The built-in challenge is designed to stop generic join scripts, blind button clicking, and low-effort spam automation without adding a web page. It is not a replacement for a browser-based bot-management service. A purpose-built userbot with OCR or AI may still solve visible challenges. High-risk communities should combine Telegram join requests with a signed, single-use verification URL and Cloudflare Turnstile.
 
 Please report vulnerabilities according to [SECURITY.md](SECURITY.md).
 
