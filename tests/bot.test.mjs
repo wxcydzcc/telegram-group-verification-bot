@@ -3,19 +3,24 @@ import test from "node:test";
 
 import { buildChallenge, buildLinkKeyboard, membershipAllowed } from "../src/index.js";
 
-test("challenge has one correct answer and four distinct options", () => {
-  const sequence = [5, 7, -2, 3, 4, 1, 0, 0, 0, 0];
-  let index = 0;
-  const deterministic = (min, max) => {
-    const value = sequence[index++] ?? min;
-    return Math.min(max, Math.max(min, value));
-  };
-  const challenge = buildChallenge(deterministic);
-  assert.equal(challenge.correct, challenge.a + challenge.b);
-  assert.equal(challenge.options.length, 4);
-  assert.equal(new Set(challenge.options).size, 4);
-  assert.ok(challenge.options.includes(challenge.correct));
+test("all challenge types produce four unique options and one valid answer index", () => {
+  for (const [index, kind] of ["arithmetic", "largest", "count", "sequence"].entries()) {
+    const challenge = buildChallenge(seededRandom(index + 1), kind);
+    assert.equal(challenge.kind, kind);
+    assert.ok(challenge.prompt.length > 0);
+    assert.equal(challenge.options.length, 4);
+    assert.equal(new Set(challenge.options).size, 4);
+    assert.ok(challenge.correctIndex >= 0 && challenge.correctIndex < 4);
+  }
 });
+
+function seededRandom(seed) {
+  let state = seed >>> 0;
+  return (min, max) => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return min + (state % (max - min + 1));
+  };
+}
 
 test("membership transition helper accepts active members", () => {
   assert.equal(membershipAllowed({ status: "member" }), true);
